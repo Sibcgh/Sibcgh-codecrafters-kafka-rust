@@ -91,6 +91,39 @@ impl Req {
     }
 }
 
+// Function to handle an incoming connection
+fn handle_connection(mut stream: std::net::TcpStream) {
+    // Read data from the stream into a buffer
+    let mut buffer = vec![0; 1024];
+    match stream.read(&mut buffer) {
+        Ok(bytes_read) => {
+            buffer.truncate(bytes_read); // Truncate unused bytes
+            match Req::parse_message(&buffer) {
+                Ok(req) => {
+                    println!("Parsed request successfully");
+                    
+                    // Create a Resp instance
+                    let resp = Resp {
+                        header: RespHeader {
+                            msg_size: 8, // Fixed-size response (8 bytes for header)
+                            correlation_id: req.get_correlation_id() as u32, // Match correlation_id
+                        },
+                    };
+                    
+                    // Convert Resp to a byte buffer and send it
+                    let buf = resp.to_bytes();
+                    stream.write_all(&buf).unwrap();
+                    println!("Sent response");
+                }
+                Err(err) => {
+                    eprintln!("Failed to parse request: {}", err);
+                }
+            }
+        }
+        Err(e) => eprintln!("Error reading from stream: {}", e),
+    }
+}
+
 fn main() {
     println!("Server started... Listening on 127.0.0.1:9092");
 
@@ -99,38 +132,10 @@ fn main() {
     
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 println!("Accepted new connection");
-
-                // Read data from the stream into a buffer
-                let mut buffer = vec![0; 1024];
-                match stream.read(&mut buffer) {
-                    Ok(bytes_read) => {
-                        buffer.truncate(bytes_read); // Truncate unused bytes
-                        match Req::parse_message(&buffer) {
-                            Ok(req) => {
-                                println!("Parsed request successfully");
-                                
-                                // Create a Resp instance
-                                let resp = Resp {
-                                    header: RespHeader {
-                                        msg_size: 8, // Fixed-size response (8 bytes for header)
-                                        correlation_id: req.get_correlation_id() as u32, // Match correlation_id
-                                    },
-                                };
-                                
-                                // Convert Resp to a byte buffer and send it
-                                let buf = resp.to_bytes();
-                                stream.write_all(&buf).unwrap();
-                                println!("Sent response");
-                            }
-                            Err(err) => {
-                                eprintln!("Failed to parse request: {}", err);
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("Error reading from stream: {}", e),
-                }
+                // Pass the stream to handle_connection function
+                handle_connection(stream);
             }
             Err(e) => {
                 eprintln!("Error accepting connection: {}", e);
