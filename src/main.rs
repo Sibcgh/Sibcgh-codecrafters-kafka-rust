@@ -130,6 +130,16 @@ fn handle_connection(mut stream: std::net::TcpStream) {
                     let api_version = req.get_api_version();
                     let curr_error_code = if api_version == -1 { 35 } else { 0 };
 
+                    // Debug print before creating the response
+                    println!(
+                        "Creating response with: msg_size={}, correlation_id={}, error_code={}, num_of_api_keys={}, api_key_max_version={}",
+                        12, // msg_size
+                        req.get_correlation_id() as u32, // correlation_id
+                        curr_error_code as u16, // error_code (cast to u16)
+                        1 as u8, // num_of_api_keys (fixed value 1)
+                        api_version as u8, // api_key_max_version (cast to u8)
+                    );
+
                     // Now use curr_error_code for the error_code
                     let resp = Resp {
                         header: RespHeader {
@@ -137,7 +147,7 @@ fn handle_connection(mut stream: std::net::TcpStream) {
                             correlation_id: req.get_correlation_id() as u32,
                             error_code: curr_error_code as u16, // Use the computed error_code was using u32 when its u16
                             num_of_api_keys: 1 as u8,
-                            api_key_max_version: api_version as u8
+                            api_key_max_version: api_version as u8,
                         },
                     };
                     
