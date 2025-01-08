@@ -5,6 +5,7 @@ use std::{io::{Read, Write}, net::TcpListener};
 struct RespHeader {
     msg_size: u32,        // 4 bytes
     correlation_id: u32,  // 4 bytes
+    error_code: u16,      // 2 bytes
 }
 
 // Define the Resp struct
@@ -23,8 +24,13 @@ impl Resp {
         // Serialize correlation_id (4 bytes)
         buf.extend(&self.header.correlation_id.to_be_bytes());
         
+        // Serialize error_code (4 bytes)
+        buf.extend(&self.header.error_code.to_be_bytes());
+
         buf
     }
+
+
 }
 
 // Define the Req Header struct
@@ -89,6 +95,17 @@ impl Req {
     fn get_correlation_id(&self) -> i32 {
         self.header.correlation_id
     }
+
+    // Method to get the API version with validation
+    fn get_api_version(&self) -> i32 {
+        if (0..=4).contains(&self.header.request_api_version) {
+            println!("API version is valid: {}", self.header.request_api_version);
+            return self.header.request_api_version.into(); // Convert i16 to i32
+        }
+        println!("API version is invalid: {}", self.header.request_api_version);
+        return -1;  // Return -1 if the version is not in the valid range (0-4)
+    }
+
 }
 
 // Function to handle an incoming connection
@@ -102,11 +119,16 @@ fn handle_connection(mut stream: std::net::TcpStream) {
                 Ok(req) => {
                     println!("Parsed request successfully");
                     
-                    // Create a Resp instance
+                    // Get the API version and set the error_code based on it
+                    let api_version = req.get_api_version();
+                    let curr_error_code = if api_version == -1 { 35 } else { api_version };
+
+                    // Now use curr_error_code for the error_code
                     let resp = Resp {
                         header: RespHeader {
-                            msg_size: 8, // Fixed-size response (8 bytes for header)
-                            correlation_id: req.get_correlation_id() as u32, // Match correlation_id
+                            msg_size: 12, // Fixed-size response with header + error_code
+                            correlation_id: req.get_correlation_id() as u32,
+                            error_code: curr_error_code as u16, // Use the computed error_code was using u32 when its u16
                         },
                     };
                     
@@ -123,6 +145,7 @@ fn handle_connection(mut stream: std::net::TcpStream) {
         Err(e) => eprintln!("Error reading from stream: {}", e),
     }
 }
+
 
 fn main() {
     println!("Server started... Listening on 127.0.0.1:9092");
