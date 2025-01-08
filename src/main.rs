@@ -3,9 +3,11 @@ use std::{io::{Read, Write}, net::TcpListener};
 
 // Define the Resp Header struct
 struct RespHeader {
-    msg_size: u32,        // 4 bytes
-    correlation_id: u32,  // 4 bytes
-    error_code: u16,      // 2 bytes
+    msg_size: u32,              // 4 bytes
+    correlation_id: u32,        // 4 bytes
+    error_code: u16,            // 2 bytes
+    num_of_api_keys: u8,        // 1 byte
+    api_key_max_version: u8,    // 1 byte
 }
 
 // Define the Resp struct
@@ -24,9 +26,14 @@ impl Resp {
         // Serialize correlation_id (4 bytes)
         buf.extend(&self.header.correlation_id.to_be_bytes());
         
-        // Serialize error_code (4 bytes)
+        // Serialize error_code (2 bytes)
         buf.extend(&self.header.error_code.to_be_bytes());
 
+        // Serialize error_code (1 byte)
+        buf.extend(&self.header.num_of_api_keys.to_be_bytes());
+
+        // Serialize error_code (1 byte)
+        buf.extend(&self.header.api_key_max_version.to_be_bytes());
         buf
     }
 
@@ -121,7 +128,7 @@ fn handle_connection(mut stream: std::net::TcpStream) {
                     
                     // Get the API version and set the error_code based on it
                     let api_version = req.get_api_version();
-                    let curr_error_code = if api_version == -1 { 35 } else { api_version };
+                    let curr_error_code = if api_version == -1 { 35 } else { 0 };
 
                     // Now use curr_error_code for the error_code
                     let resp = Resp {
@@ -129,6 +136,8 @@ fn handle_connection(mut stream: std::net::TcpStream) {
                             msg_size: 12, // Fixed-size response with header + error_code
                             correlation_id: req.get_correlation_id() as u32,
                             error_code: curr_error_code as u16, // Use the computed error_code was using u32 when its u16
+                            num_of_api_keys: 1 as u8,
+                            api_key_max_version: api_version as u8
                         },
                     };
                     
