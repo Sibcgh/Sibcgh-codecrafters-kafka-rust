@@ -1,194 +1,130 @@
 #![allow(unused_imports)]
-use std::{io::{Read, Write}, net::TcpListener};
-
-struct RespHeader {
-    msg_size: u32,              // 4 bytes
-    correlation_id: u32,        // 4 bytes
-    error_code: u16,            // 2 bytes
-    num_of_api_keys: u8,        // 1 byte
-    api_key_max_version: u8,    // 1 byte
-}
-
-struct Resp {
-    header: RespHeader,
-}
-
-impl Resp {
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        
-        // Serialize msg_size (4 bytes)
-        buf.extend(&self.header.msg_size.to_be_bytes());
-        
-        // Serialize correlation_id (4 bytes)
-        buf.extend(&self.header.correlation_id.to_be_bytes());
-        
-        // Serialize error_code (2 bytes)
-        buf.extend(&self.header.error_code.to_be_bytes());
-
-        // Serialize num_of_api_keys (1 byte)
-        buf.push(self.header.num_of_api_keys);
-
-        // Serialize api_key_max_version (1 byte)
-        buf.push(self.header.api_key_max_version);
-
-        buf
-    }
-}
-
-struct ReqHeader {
-    request_api_key: i16,
-    request_api_version: i16,
-    correlation_id: i32,
-    client_id: Option<String>, // NULLABLE_STRING
-}
-
-struct Req {
-    msg_size: u32,             // This will hold the message size
-    header: ReqHeader,
-    body: Vec<u8>,
-}
-
-impl Req {
-    fn parse_message(message: &[u8]) -> Result<Self, String> {
-        if message.len() < 8 {
-            return Err("Message too short to parse".to_string());
-        }
-
-        // First 4 bytes for message size
-        let msg_size = u32::from_be_bytes([message[0], message[1], message[2], message[3]]);
-        println!("Parsed message size: {}", msg_size);
-
-        // Rest of the header parsing
-        let request_api_key = i16::from_be_bytes([message[4], message[5]]);
-        let request_api_version = i16::from_be_bytes([message[6], message[7]]);
-        let correlation_id = i32::from_be_bytes([message[8], message[9], message[10], message[11]]);
-
-        let mut current_pos = 12;
-        let client_id = if message.len() > current_pos {
-            if current_pos + 2 > message.len() {
-                return Err("Message too short for client ID length".to_string());
-            }
-            let client_id_length = i16::from_be_bytes([message[current_pos], message[current_pos + 1]]);
-            current_pos += 2;
-
-            if client_id_length < 0 {
-                None
-            } else {
-                let length = client_id_length as usize;
-                if current_pos + length > message.len() {
-                    return Err("Message too short for client ID content".to_string());
-                }
-                let client_id_bytes = &message[current_pos..current_pos + length];
-                current_pos += length;
-                Some(String::from_utf8_lossy(client_id_bytes).to_string())
-            }
-        } else {
-            None
-        };
-
-        let body = if current_pos < message.len() {
-            message[current_pos..].to_vec()
-        } else {
-            vec![]
-        };
-
-        Ok(Req {
-            msg_size,
-            header: ReqHeader {
-                request_api_key,
-                request_api_version,
-                correlation_id,
-                client_id,
-            },
-            body,
-        })
-    }
-
-    fn get_correlation_id(&self) -> i32 {
-        self.header.correlation_id
-    }
-
-    fn get_api_version(&self) -> i32 {
-        if (0..=4).contains(&self.header.request_api_version) {
-            println!("API version is valid: {}", self.header.request_api_version);
-            self.header.request_api_version.into()
-        } else {
-            println!("API version is invalid: {}", self.header.request_api_version);
-            -1
-        }
-    }
-}
-
-fn handle_connection(mut stream: std::net::TcpStream) {
-    // Read the first 4 bytes of the incoming message to get the message size
-    let mut size_buf = [0u8; 4];
-    if let Err(e) = stream.read_exact(&mut size_buf) {
-        eprintln!("Error reading size: {}", e);
-        return;
-    }
-
-    let msg_size = u32::from_be_bytes(size_buf);
-    println!("Message size: {}", msg_size);
-
-    if msg_size == 0 {
-        println!("Message size is zero. Closing connection.");
-        return;
-    }
-
-    // Read the entire message, using msg_size to determine the length
-    let mut buffer = vec![0; msg_size as usize];
-    if let Err(e) = stream.read_exact(&mut buffer) {
-        eprintln!("Error reading message body: {}", e);
-        return;
-    }
-
-    match Req::parse_message(&buffer) {
-        Ok(req) => {
-            println!("Parsed request successfully");
-
-            let api_version = req.get_api_version();
-            let error_code = if api_version == -1 { 35 } else { 0 };
-
-            // Set the response msg_size to be the same as the request msg_size
-            let resp = Resp {
-                header: RespHeader {
-                    msg_size: req.msg_size,  // Use the same message size
-                    correlation_id: req.get_correlation_id() as u32,
-                    error_code: error_code as u16,
-                    num_of_api_keys: 1,
-                    api_key_max_version: if api_version == -1 { 0 } else { api_version as u8 },
-                },
-            };
-
-            let resp_bytes = resp.to_bytes();
-            if let Err(e) = stream.write_all(&resp_bytes) {
-                eprintln!("Error sending response: {}", e);
-            } else {
-                println!("Sent response: {:?}", resp_bytes);
-            }
-        }
-        Err(err) => {
-            eprintln!("Failed to parse request: {}", err);
-        }
-    }
-}
-
+use std::{
+    io::{BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
+};
+use bytes::{Buf, BufMut, BytesMut};
 
 fn main() {
-    println!("Server started... Listening on 127.0.0.1:9092");
-    
     let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
-    
+    println!("Server running on 127.0.0.1:9092");
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 println!("Accepted new connection");
-                handle_connection(stream);
+                if let Err(e) = handle_request(stream) {
+                    eprintln!("Failed to handle request: {}", e);
+                }
             }
             Err(e) => {
-                eprintln!("Error accepting connection: {}", e);
+                eprintln!("Connection error: {}", e);
             }
         }
     }
+}
+
+struct RequestHeader {
+    api_key: u16,
+    api_version: u16,
+    correlation_id: u32,
+    client_id: String,
+}
+
+struct ResponseHeader {
+    correlation_id: u32,
+    error_code: i16,
+    num_api_keys: u8,
+    api_key: i16,
+    min_version: i16,
+    max_version: i16,
+    throttle_time: i32,
+    placeholder_byte1: u8,
+    placeholder_byte2: u8,
+}
+
+fn handle_request(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(&stream);
+    let mut buf = [0; 1024];
+
+    // Read request from the stream
+    let bytes_read = reader.read(&mut buf)?;
+    if bytes_read == 0 {
+        return Err("Empty request".into());
+    }
+
+    // Parse request
+    let mut bytes_mut = BytesMut::from(&buf[..bytes_read]);
+    let _msg_size = bytes_mut.get_u32();
+    let header = parse_header(&mut bytes_mut)?;
+
+    // Generate response
+    let response = build_response(header);
+
+    // Log the response
+    println!("Sending response: {:?}", response);
+
+    // Send the response
+    stream.write_all(&response)?;
+    Ok(())
+}
+
+fn parse_header(bytes_mut: &mut BytesMut) -> Result<RequestHeader, Box<dyn std::error::Error>> {
+    if bytes_mut.remaining() < 10 {
+        return Err("Insufficient data for header".into());
+    }
+
+    let api_key = bytes_mut.get_u16();
+    let api_version = bytes_mut.get_u16();
+    let correlation_id = bytes_mut.get_u32();
+    let client_id = "".to_string(); // Placeholder for now
+
+    Ok(RequestHeader {
+        api_key,
+        api_version,
+        correlation_id,
+        client_id,
+    })
+}
+
+fn build_response(req_header: RequestHeader) -> BytesMut {
+    let mut response_header = ResponseHeader {
+        correlation_id: req_header.correlation_id,
+        error_code: 0,
+        num_api_keys: 0,
+        api_key: -1,
+        min_version: -1,
+        max_version: -1,
+        throttle_time: 0,
+        placeholder_byte1: 0,
+        placeholder_byte2: 0,
+    };
+
+    if req_header.api_key == 18 {
+        response_header.error_code = if req_header.api_version > 4 { 35 } else { 0 };
+        response_header.num_api_keys = 2;
+        response_header.api_key = 18;
+        response_header.min_version = 0;
+        response_header.max_version = 4;
+        response_header.throttle_time = 0;
+    } else {
+        response_header.error_code = -1; // Unknown API key
+    }
+
+    let mut response_body = BytesMut::new();
+    response_body.put_i16(response_header.error_code);
+    response_body.put_u8(response_header.num_api_keys);
+    response_body.put_i16(response_header.api_key);
+    response_body.put_i16(response_header.min_version);
+    response_body.put_i16(response_header.max_version);
+    response_body.put_i32(response_header.throttle_time);
+    response_body.put_u8(response_header.placeholder_byte1);
+    response_body.put_u8(response_header.placeholder_byte2);
+
+    let mut response = BytesMut::new();
+    response.put_u32(response_body.len() as u32 + 4); // Total message size
+    response.put_u32(response_header.correlation_id);
+    response.put(response_body);
+
+    response
 }
